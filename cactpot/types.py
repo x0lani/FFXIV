@@ -1,4 +1,5 @@
 import itertools
+from collections import Counter
 from typing import Set, Sequence
 
 import numpy as np
@@ -12,43 +13,59 @@ class Vector:
         self.known = {v1, v2, v3} - {NULL}
         if len(self.known) + len(self.available) < 3:
             raise RuntimeError('Insufficient values available')
+        self._payouts: Counter = None
         self._mean: float = None
         self._variance: float = None
 
     @property
     def mean(self) -> float:
         """Expected value of this vector"""
-        if self._mean is not None:
-            return self._mean
-        self.populate_stats()
+        if self._mean is None:
+            self._mean = float(np.mean(list(self.payouts)))
         return self._mean
 
     @property
     def variance(self) -> float:
         """Expected variance of this vector"""
-        if self._variance is not None:
-            return self._variance
-        self.populate_stats()
+        if self._variance is None:
+            self._variance = float(np.var(list(self.payouts)))
         return self._variance
 
-    def populate_stats(self):
-        if len(self.known) == 3:
-            self._variance = 0
-            self._mean = PAYOUT[sum(self.known)]
-        else:
-            sum_known = sum(self.known) if self.known else 0
-            pick = 3 - len(self.known)
-            payouts = []
-            for selection in itertools.combinations(self.available, pick):
-                payouts.append(PAYOUT[sum_known + sum(selection)])
-            self._mean = float(np.mean(payouts))
-            self._variance = float(np.var(payouts))
+    @property
+    def payouts(self) -> Counter[int]:
+        """Possible payouts of this vector"""
+        if self._payouts is None:
+            self._payouts = Counter()
+            if len(self.known) == 3:
+                self._payouts.update([PAYOUT[sum(self.known)]])
+            elif len(self.known) == 2:
+                vals = list(self.known)
+                v0, v1 = vals[0], vals[1]
+                for v in self.available:
+                    v_next = Vector(v0, v1, v)
+                    self._payouts.update(v_next.payouts)
+            elif len(self.known) == 1:
+                v0 = list(self.known)[0]
+                for v1, v2 in itertools.combinations(self.available, 2):
+                    v_next = Vector(v0, v1, v2)
+                    self._payouts.update(v_next.payouts)
+            else:
+                for v0, v1, v2 in itertools.combinations(self.available, 3):
+                    v_next = Vector(v0, v1, v2)
+                    self._payouts.update(v_next.payouts)
+        return self._payouts
 
     def __repr__(self):
         return f'<Vector {",".join(str(i) for i in self.known)}>'
 
     def __str__(self):
         return f'<Vector({",".join(str(i) for i in self.known)}) μ={self.mean:,.0f} V={self.variance:,.0f}>'
+
+    def __hash__(self):
+        values = list(self.known)
+        values.sort()
+        values += [NULL] * (3 - len(values))
+        return hash(tuple(values))
 
 
 class Board:
@@ -74,22 +91,28 @@ class Board:
                             f=Vector(state[1], state[4], state[7], available_values=self.available),
                             g=Vector(state[2], state[5], state[8], available_values=self.available),
                             h=Vector(state[2], state[4], state[6], available_values=self.available))
-        self._max_vector = None
+        self._max_direction = None
         self._total_variance = None
         self._max_tile = None
 
     @property
-    def max_vector(self) -> str:
-        if self._max_vector is None:
-            max_k = ''
+    def max_direction(self) -> str:
+        """Returns vector label with maximum mean value"""
+        if self._max_direction is None:
+            max_label = ''
             max_v = -np.inf
-            for k, v in self.vectors.items():
-                value = v.mean
+            for label, vector in self.vectors.items():
+                value = vector.mean
                 if value > max_v:
-                    max_k = k
+                    max_label = label
                     max_v = value
-            self._max_vector = max_k
-        return self._max_vector
+            self._max_direction = max_label
+        return self._max_direction
+
+    @property
+    def max_vector(self) -> Vector:
+        """Returns vector maximum exp value"""
+        return self.vectors[self.max_direction]
 
     def __repr__(self):
         return f'<Board {self.state}>'
@@ -100,11 +123,10 @@ class Board:
         if self.available:
             board = board[:self.max_tile] + '*' + board[self.max_tile + 1:]
         board = 'defgh\nc' + board[0:3] + ' \nb' + board[3:6] + ' \na' + board[6:] + ' '
-        board = board.replace(self.max_vector, self._markers[self.max_vector])
+        board = board.replace(self.max_direction, self._markers[self.max_direction])
         for c in 'abcdefgh':
             board = board.replace(c, '.')
         return board
-
 
     @property
     def total_variance(self) -> float:
@@ -145,4 +167,3 @@ class Board:
                 min_tile = tile
         self._max_tile = min_tile
         return min_tile
-
